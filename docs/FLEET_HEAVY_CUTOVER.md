@@ -92,19 +92,24 @@ bin/fleet-status
 
 VPS tmux cannot SIGTERM this host unless we add a later bridge. First version: Ricky (or a non-chat shell on Grok Bot's computer) runs the command.
 
-### 4.1 Must refuse (exit 2)
+### 4.1 Must refuse on cutover path (exit 2)
+
+Applies to `fleet-heavy` cutover (with or without `--go`), **not** to `fleet-heavy status` / `fleet-status` (those are ungated preflight printers).
 
 - Missing `--i-am-outside-chat`
-- Parent walk finds `host-main.cjs` / `sand-host` (or `FLEET_FORCE_INSIDE=1`)
-- `Grok-session recover` is enabled
+- Parent walk finds `host-main.cjs` / `sand-host` (test-only `FLEET_FORCE_INSIDE=1` requires `FLEET_ALLOW_TEST_OVERRIDES=1`)
+- `agent-data` or transcripts dir missing/unreadable (cannot prove idle/recover paused)
+- `Grok-session recover` is enabled, or its JSON is unreadable/invalid
 - Host-hook watchdog is running
 - `~/.grok/auth.json` is missing. Do not `grok login` from the wrapper.
 - Any office jsonl is hot in the last N seconds (mid-turn)
-- Any office jsonl mutates at or after cutover start (preflight race; covers the case where preflight lasts longer than the hot window)
+- Any office jsonl mtime is **at or after** cutover start (preflight race)
+
+Test harness overrides (`FLEET_ADAPTERS`, `FLEET_FORCE_*`, path/auth stubs, etc.) are ignored unless `FLEET_ALLOW_TEST_OVERRIDES=1`.
 
 ### 4.2 Default is dry-run
 
-Prints `adapters status`, a jsonl size table (warn if > 40 MiB), gate results, and the adapters command that **would** run. Does not call `adapters use`. Does not restart.
+Prints `adapters status`, a jsonl size table (warn if > 40 MiB), gate results, and the adapters command that **would** run. Does not call `adapters use`. Does not restart. Note: `adapters status` may chmod the CLIProxy binary executable as a side effect of that existing command — dry-run is not a pure no-op filesystem-wise, but it does not switch inference or restart the host.
 
 ### 4.3 Live needs both flags
 

@@ -16,15 +16,28 @@ _script_dir() {
 }
 
 ROOT="$(cd "$(_script_dir)/.." && pwd)"
-ADAPTERS="${FLEET_ADAPTERS:-$ROOT/adapters.sh}"
-AGENT_DATA="${FLEET_AGENT_DATA:-$HOME/agent-data}"
-TRANSCRIPTS="${FLEET_TRANSCRIPTS:-$AGENT_DATA/agent-transcripts}"
-AUTH_FILE="${FLEET_GROK_AUTH:-$HOME/.grok/auth.json}"
-HOT_SECONDS="${FLEET_HOT_SECONDS:-15}"
-WATCHDOG_PIDFILE="${FLEET_WATCHDOG_PIDFILE:-${HOST_HOOK_DIR:-$HOME/.local/share/grok-bot-adapters/host-hook-watchdog}/watchdog.pid}"
-COS_JSONL_WARN_BYTES="${FLEET_COS_WARN_BYTES:-41943040}"
-MODEL="${FLEET_MODEL:-grok-4.6}"
-EFFORT="${FLEET_EFFORT:-medium}"
+ADAPTERS="$ROOT/adapters.sh"
+AGENT_DATA="$HOME/agent-data"
+TRANSCRIPTS="$AGENT_DATA/agent-transcripts"
+AUTH_FILE="$HOME/.grok/auth.json"
+HOT_SECONDS=15
+WATCHDOG_PIDFILE="${HOST_HOOK_DIR:-$HOME/.local/share/grok-bot-adapters/host-hook-watchdog}/watchdog.pid"
+COS_JSONL_WARN_BYTES=41943040
+MODEL="grok-4.6"
+EFFORT="medium"
+
+# Test harness only. Production cutover ignores these overrides.
+if [[ "${FLEET_ALLOW_TEST_OVERRIDES:-}" == "1" ]]; then
+  ADAPTERS="${FLEET_ADAPTERS:-$ADAPTERS}"
+  AGENT_DATA="${FLEET_AGENT_DATA:-$AGENT_DATA}"
+  TRANSCRIPTS="${FLEET_TRANSCRIPTS:-$AGENT_DATA/agent-transcripts}"
+  AUTH_FILE="${FLEET_GROK_AUTH:-$AUTH_FILE}"
+  HOT_SECONDS="${FLEET_HOT_SECONDS:-$HOT_SECONDS}"
+  WATCHDOG_PIDFILE="${FLEET_WATCHDOG_PIDFILE:-$WATCHDOG_PIDFILE}"
+  COS_JSONL_WARN_BYTES="${FLEET_COS_WARN_BYTES:-$COS_JSONL_WARN_BYTES}"
+  MODEL="${FLEET_MODEL:-$MODEL}"
+  EFFORT="${FLEET_EFFORT:-$EFFORT}"
+fi
 
 WANT_GO=0
 OUTSIDE_CHAT=0
@@ -63,16 +76,18 @@ EOF
 }
 
 inside_sand() {
-  if [[ "${FLEET_FORCE_INSIDE:-}" == "1" ]]; then
-    return 0
-  fi
-  if [[ "${FLEET_FORCE_OUTSIDE:-}" == "1" ]]; then
-    return 1
+  if test_overrides_allowed; then
+    if [[ "${FLEET_FORCE_INSIDE:-}" == "1" ]]; then
+      return 0
+    fi
+    if [[ "${FLEET_FORCE_OUTSIDE:-}" == "1" ]]; then
+      return 1
+    fi
   fi
   local p="${PPID:-}"
   local i=0
   local cmd
-  while [[ "$i" -lt 12 && -n "$p" && "$p" != "0" && "$p" != "1" ]]; do
+  while [[ "$i" -lt 32 && -n "$p" && "$p" != "0" && "$p" != "1" ]]; do
     cmd=""
     if [[ -r "/proc/$p/cmdline" ]]; then
       cmd="$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null || true)"
@@ -90,26 +105,54 @@ inside_sand() {
   return 1
 }
 
+test_overrides_allowed() {
+  [[ "${FLEET_ALLOW_TEST_OVERRIDES:-}" == "1" ]]
+}
+
+# 0 = enabled, 1 = disabled, 2 = unreadable/invalid (caller must refuse on cutover)
 json_enabled() {
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("enabled") else 1)' "$1"
+  python3 -c '
+import json,sys
+try:
+    d=json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(2)
+sys.exit(0 if d.get("enabled") else 1)
+' "$1"
 }
 
 recover_enabled() {
-  local f
-  if [[ -n "${FLEET_RECOVER_JSON:-}" && -f "${FLEET_RECOVER_JSON}" ]]; then
-    if json_enabled "$FLEET_RECOVER_JSON"; then
+  local f rc
+  if test_overrides_allowed && [[ -n "${FLEET_RECOVER_JSON:-}" ]]; then
+    if [[ ! -f "${FLEET_RECOVER_JSON}" ]]; then
+      return 1
+    fi
+    json_enabled "$FLEET_RECOVER_JSON"
+    rc=$?
+    if [[ "$rc" -eq 0 ]]; then
       printf '%s\n' "$FLEET_RECOVER_JSON"
+      return 0
+    fi
+    if [[ "$rc" -eq 2 ]]; then
+      printf 'INVALID:%s\n' "$FLEET_RECOVER_JSON"
       return 0
     fi
     return 1
   fi
   if [[ ! -d "$AGENT_DATA" ]]; then
+    # Missing agent-data is handled by enforce_office_state; here treat as no recover.
     return 1
   fi
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
-    if json_enabled "$f"; then
+    json_enabled "$f"
+    rc=$?
+    if [[ "$rc" -eq 0 ]]; then
       printf '%s\n' "$f"
+      return 0
+    fi
+    if [[ "$rc" -eq 2 ]]; then
+      printf 'INVALID:%s\n' "$f"
       return 0
     fi
   done < <(find "$AGENT_DATA" -path '*/automations/grok-session-recover/automation.json' 2>/dev/null || true)
@@ -131,12 +174,30 @@ hot_jsonls() {
   find "$TRANSCRIPTS" -name '*.jsonl' -newermt "-${HOT_SECONDS} seconds" 2>/dev/null || true
 }
 
-# jsonl touched at or after cutover start (preflight race)
+# jsonl mtime >= cutover start (at or after). find -newermt is strictly after.
 mutated_since_t0() {
   if [[ -z "${CUTOVER_T0:-}" || ! -d "$TRANSCRIPTS" ]]; then
     return 0
   fi
-  find "$TRANSCRIPTS" -name '*.jsonl' -newermt "@${CUTOVER_T0}" 2>/dev/null || true
+  python3 -c '
+import os,sys
+root,t0=sys.argv[1],int(sys.argv[2])
+hits=[]
+for dirpath,_,files in os.walk(root):
+    for name in files:
+        if not name.endswith(".jsonl"):
+            continue
+        path=os.path.join(dirpath,name)
+        try:
+            m=int(os.path.getmtime(path))
+        except OSError:
+            hits.append(path+":UNREADABLE")
+            continue
+        if m>=t0:
+            hits.append(path)
+for h in sorted(hits):
+    print(h)
+' "$TRANSCRIPTS" "$CUTOVER_T0" 2>/dev/null || true
 }
 
 jsonl_table() {
@@ -220,9 +281,21 @@ enforce_gates() {
   if inside_sand; then
     refuse "running under sand-host. Run me from tmux or a box shell, not CoS."
   fi
+  if [[ ! -d "$AGENT_DATA" ]]; then
+    refuse "agent-data missing or unreadable at $AGENT_DATA. Cannot prove recover is paused."
+  fi
+  if [[ ! -d "$TRANSCRIPTS" ]]; then
+    refuse "transcripts missing or unreadable at $TRANSCRIPTS. Cannot prove office is idle."
+  fi
+  if [[ ! -r "$TRANSCRIPTS" ]]; then
+    refuse "transcripts not readable at $TRANSCRIPTS. Cannot prove office is idle."
+  fi
   local rec
   rec="$(recover_enabled || true)"
   if [[ -n "${rec:-}" ]]; then
+    if [[ "$rec" == INVALID:* ]]; then
+      refuse "Grok-session recover JSON unreadable/invalid (${rec#INVALID:}). Fix or remove it; do not guess."
+    fi
     refuse "Grok-session recover is enabled ($rec). Leave it paused."
   fi
   if watchdog_running; then
@@ -239,7 +312,7 @@ enforce_gates() {
   local mutated
   mutated="$(mutated_since_t0)"
   if [[ -n "$mutated" ]]; then
-    refuse "office jsonl mutated during preflight. Idle and re-run. Changed:"$'\n'"$mutated"
+    refuse "office jsonl mutated at or after cutover start. Idle and re-run. Changed:"$'\n'"$mutated"
   fi
 }
 
@@ -279,6 +352,12 @@ main() {
     exit 0
   fi
   CUTOVER_T0="${FLEET_CUTOVER_T0:-$(date +%s)}"
+  if ! test_overrides_allowed; then
+    unset FLEET_CUTOVER_T0 2>/dev/null || true
+    CUTOVER_T0="$(date +%s)"
+  elif [[ -n "${FLEET_CUTOVER_T0:-}" ]]; then
+    CUTOVER_T0="$FLEET_CUTOVER_T0"
+  fi
   preflight
   enforce_gates
   if [[ "$WANT_GO" -eq 1 ]]; then

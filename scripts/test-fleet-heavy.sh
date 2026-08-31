@@ -67,6 +67,8 @@ echo "STUB $*"
 STUB
 chmod +x "$WORKDIR/stub-adapters" "$FLEET" "$ROOT/bin/fleet-status"
 
+# Harness overrides are gated. Without the allow flag they must be ignored.
+export FLEET_ALLOW_TEST_OVERRIDES=1
 export FLEET_FORCE_OUTSIDE=1
 export FLEET_ADAPTERS="$WORKDIR/stub-adapters"
 export FLEET_AGENT_DATA="$WORKDIR/agent-data"
@@ -83,9 +85,34 @@ assert_exit 2 "refuse without --i-am-outside-chat" \
 assert_exit 2 "refuse if inside sand-host" \
   env FLEET_FORCE_OUTSIDE=0 FLEET_FORCE_INSIDE=1 "$FLEET" --i-am-outside-chat
 
+# Prod must ignore FORCE_INSIDE without the allow flag.
+# Without overrides, this VPS lacks office agent-data → refuse missing state, NOT sand-host.
+assert_exit 2 "FORCE_INSIDE ignored without allow flag" \
+  env -u FLEET_ALLOW_TEST_OVERRIDES FLEET_FORCE_INSIDE=1 "$FLEET" --i-am-outside-chat
+if grep -q 'running under sand-host' /tmp/fleet-test-err; then
+  printf 'FAIL FORCE_INSIDE without allow still tripped sand gate\n'
+  FAIL=$((FAIL + 1))
+else
+  printf 'ok  FORCE_INSIDE without allow did not trip sand gate\n'
+  PASS=$((PASS + 1))
+fi
+assert_exit 2 "allow+FORCE_INSIDE still refuses" \
+  env FLEET_ALLOW_TEST_OVERRIDES=1 FLEET_FORCE_OUTSIDE=0 FLEET_FORCE_INSIDE=1 \
+  "$FLEET" --i-am-outside-chat
+if ! grep -q 'running under sand-host' /tmp/fleet-test-err; then
+  printf 'FAIL allow+FORCE_INSIDE should refuse via sand gate\n'
+  FAIL=$((FAIL + 1))
+else
+  printf 'ok  allow+FORCE_INSIDE refused via sand gate\n'
+  PASS=$((PASS + 1))
+fi
 printf '%s\n' '{"name":"Grok-session recover","enabled":true}' \
   > "$WORKDIR/agent-data/agents/test/automations/grok-session-recover/automation.json"
 assert_exit 2 "refuse if recover enabled" \
+  "$FLEET" --i-am-outside-chat
+printf '%s\n' 'NOT-JSON' \
+  > "$WORKDIR/agent-data/agents/test/automations/grok-session-recover/automation.json"
+assert_exit 2 "refuse if recover JSON invalid" \
   "$FLEET" --i-am-outside-chat
 printf '%s\n' '{"name":"Grok-session recover","enabled":false}' \
   > "$WORKDIR/agent-data/agents/test/automations/grok-session-recover/automation.json"
@@ -98,13 +125,23 @@ rm -f "$WORKDIR/watchdog/watchdog.pid"
 assert_exit 2 "refuse if no grok oauth" \
   env FLEET_GROK_AUTH="$WORKDIR/missing-auth.json" "$FLEET" --i-am-outside-chat
 
+assert_exit 2 "refuse if transcripts missing" \
+  env FLEET_TRANSCRIPTS="$WORKDIR/missing-transcripts" "$FLEET" --i-am-outside-chat
+
 touch "$WORKDIR/agent-data/agent-transcripts/tiny/tiny.jsonl"
 assert_exit 2 "refuse if jsonl hot" \
   env FLEET_HOT_SECONDS=60 "$FLEET" --i-am-outside-chat
 touch -d "10 minutes ago" "$WORKDIR/agent-data/agent-transcripts/tiny/tiny.jsonl"
 
-# Mutation during preflight: file newer than CUTOVER_T0 but outside the hot window.
-# Simulates a turn that started at cutover start then went idle before the final gate.
+# Equality boundary: mtime == CUTOVER_T0 must refuse (at or after).
+T0=$(( $(date +%s) - 30 ))
+touch -d "@${T0}" "$WORKDIR/agent-data/agent-transcripts/tiny/tiny.jsonl"
+assert_exit 2 "refuse if jsonl mtime equals cutover t0" \
+  env FLEET_HOT_SECONDS=1 FLEET_CUTOVER_T0="$T0" \
+  "$FLEET" --i-am-outside-chat
+touch -d "10 minutes ago" "$WORKDIR/agent-data/agent-transcripts/tiny/tiny.jsonl"
+
+# Strictly after T0, outside hot window.
 touch -d "5 seconds ago" "$WORKDIR/agent-data/agent-transcripts/tiny/tiny.jsonl"
 assert_exit 2 "refuse if jsonl mutated since cutover t0" \
   env FLEET_HOT_SECONDS=1 FLEET_CUTOVER_T0="$(( $(date +%s) - 30 ))" \
