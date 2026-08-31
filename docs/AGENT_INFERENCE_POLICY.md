@@ -13,7 +13,14 @@
 - `provider: codex` (Pump) → `http://127.0.0.1:10531/v1` with dummy Bearer `openai-oauth`. **Fail closed** if `~/.codex/auth.json` missing or proxy down — no Grok fallback, no Cursor fallback.
 - Hook install (`ensure-xai-inference.sh`) **rethrows** on create failure (no Cursor catch).
 
-**Before Pump GO:** log-only / smoke must prove `sessionOptions` carries the real agent UUID (slice 0). Empty `agentId` → default Heavy medium for effort seats only — Pump must not rely on empty id.
+**Before Pump GO — slice 0 (log-only):** set `SAND_XAI_DUMP_SESSION_KEYS=1` in `xai-inference.env` (or the host env), restart once, ping CoS and Pump, then:
+
+```bash
+grep 'sessionOptions keys' /tmp/sand-host-manual.log | tail -20
+grep '\[sand-xai\] agent=' /tmp/sand-host-manual.log | tail -20
+```
+
+Need a real UUID in `extracted agentId=…`. If `(empty)`, patch `host-main` to pass `agentId` before enabling Pump. Unset the dump flag after.
 
 ## Install on the box (desktop terminal)
 
