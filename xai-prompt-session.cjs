@@ -1217,6 +1217,28 @@ function createXaiPromptSession(options) {
   const sessionOptions = opts.sessionOptions;
   const inference = resolveAgentInference(sessionOptions, opts);
 
+  // Slice 0: log key paths only (no values) when SAND_XAI_DUMP_SESSION_KEYS=1
+  if (truthy(process.env.SAND_XAI_DUMP_SESSION_KEYS)) {
+    try {
+      const keys = [];
+      const walk = (obj, prefix, depth) => {
+        if (!obj || typeof obj !== "object" || depth > 3) return;
+        for (const k of Object.keys(obj)) {
+          const p = prefix ? `${prefix}.${k}` : k;
+          keys.push(p);
+          const v = obj[k];
+          if (v && typeof v === "object" && !Array.isArray(v) && depth < 2) walk(v, p, depth + 1);
+        }
+      };
+      walk(sessionOptions || {}, "", 0);
+      console.error(
+        `[sand-xai] sessionOptions keys (no values): ${keys.slice(0, 80).join(", ") || "(none)"} | extracted agentId=${inference.agentId || "(empty)"}`
+      );
+    } catch (e) {
+      console.error(`[sand-xai] sessionOptions key dump failed: ${e && e.message ? e.message : e}`);
+    }
+  }
+
   console.error(
     `[sand-xai] agent=${inference.agentId || inference.label} effort=${inference.effort || "none"} model=${inference.model} provider=${inference.provider}`
   );
