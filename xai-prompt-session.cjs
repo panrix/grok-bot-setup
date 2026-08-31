@@ -698,6 +698,7 @@ function isUuid(s) {
 }
 
 function extractAgentId(sessionOptions, options) {
+  // Allowlist only — do NOT walk source_agent_id / target_agent_id /agent/i keys.
   const opts = options || {};
   const so = sessionOptions || {};
   const candidates = [
@@ -705,31 +706,12 @@ function extractAgentId(sessionOptions, options) {
     so.agentId,
     so.agentID,
     so.agent_id,
-    so.agentUuid,
-    so.agentUUID,
     so.agent && so.agent.id,
     so.agent && so.agent.agentId,
-    so.conversation && so.conversation.agentId,
-    so.conversation && so.conversation.agent && so.conversation.agent.id,
-    so.metadata && so.metadata.agentId,
-    so.sandAgentId,
-    so.boxAgentId,
   ];
   for (const c of candidates) {
     const s = asString(c).trim();
     if (isUuid(s)) return s.toLowerCase();
-  }
-  // shallow walk: any uuid under a key that looks agent-related
-  const stack = [so];
-  let depth = 0;
-  while (stack.length && depth < 40) {
-    depth += 1;
-    const cur = stack.pop();
-    if (!cur || typeof cur !== "object") continue;
-    for (const [k, v] of Object.entries(cur)) {
-      if (typeof v === "string" && /agent/i.test(k) && isUuid(v)) return v.toLowerCase();
-      if (v && typeof v === "object" && depth < 6) stack.push(v);
-    }
   }
   return "";
 }
@@ -742,24 +724,61 @@ function normalizeEffort(v) {
   return s;
 }
 
+/** UUIDs that must never silently default to grok-heavy without an explicit policy row. */
+const REQUIRE_EXPLICIT_ROW = {
+  "8ae9a103-cfa2-406d-9bf3-eea00ca5b3a9": "codex", // Pump — never accidental Heavy
+};
+
 /**
  * Resolve per-agent overlay. Locals only — never mutates process.env.
- * Unknown UUID → default effort medium + WARN.
+ * Missing/unreadable policy → provider policy-missing (fail closed, not grok-heavy).
+ * Unknown UUID with policy present → default effort medium + WARN.
  */
 function resolveAgentInference(sessionOptions, options) {
   const policy = loadAgentPolicy();
   const agentId = extractAgentId(sessionOptions, options);
-  const defaults = (policy && policy.default) || {};
+  const labelHint = agentId || "unknown";
+
+  if (!policy) {
+    console.error(
+      `[sand-xai] REFUSE policy missing/unreadable at ${policyFilePath()} — fail-closed (no silent grok-heavy)`
+    );
+    return {
+      agentId: agentId || "",
+      label: labelHint,
+      provider: "policy-missing",
+      model: "none",
+      effort: undefined,
+      known: false,
+    };
+  }
+
+  const defaults = policy.default || {};
   const row =
-    agentId && policy && policy.agents && typeof policy.agents === "object"
+    agentId && policy.agents && typeof policy.agents === "object"
       ? policy.agents[agentId] || policy.agents[agentId.toLowerCase()]
       : null;
 
-  if (agentId && policy && policy.agents && !row) {
+  if (agentId && REQUIRE_EXPLICIT_ROW[agentId] && !row) {
+    console.error(
+      `[sand-xai] REFUSE agent ${agentId} requires an explicit policy row (expected ${REQUIRE_EXPLICIT_ROW[agentId]}) — not grok-heavy`
+    );
+    return {
+      agentId,
+      label: labelHint,
+      provider: "policy-row-missing",
+      model: "none",
+      effort: undefined,
+      known: false,
+    };
+  }
+
+  if (agentId && policy.agents && !row) {
     console.error(`[sand-xai] WARN unknown agent uuid=${agentId} — using default effort=medium`);
   }
 
-  const provider = asString((row && row.provider) || defaults.provider || "grok-heavy").toLowerCase() || "grok-heavy";
+  const provider =
+    asString((row && row.provider) || defaults.provider || "grok-heavy").toLowerCase() || "grok-heavy";
   const model =
     asString((row && row.model) || defaults.model || "").trim() ||
     env("SAND_XAI_MODEL", "grok-4.6");
@@ -841,6 +860,13 @@ function probeCodexProxy(baseUrl) {
 }
 
 async function resolveSessionAuth(inference) {
+  if (inference.provider === "policy-missing" || inference.provider === "policy-row-missing") {
+    const err = new Error(
+      `agent-inference-policy required (${inference.provider}) — copy examples/agent-inference-policy.json to sand-data; will not default Pump/codex seats to Grok`
+    );
+    err.code = "POLICY_REQUIRED";
+    throw err;
+  }
   if (inference.provider === "codex") {
     const auth = resolveCodexAuth();
     const ok = await probeCodexProxy(auth.baseUrl);

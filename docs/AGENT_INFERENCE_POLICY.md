@@ -6,12 +6,14 @@
 
 `xai-prompt-session.cjs` reads `/home/box/sand-data/agent-inference-policy.json` (override with `SAND_AGENT_INFERENCE_POLICY`) on each session.
 
-- Keys are **agent UUIDs** (never display names).
-- Default: Heavy `grok-4.6` effort **medium**.
-- Per-agent `effort` / `provider` / `model` as locals — **never** written into `process.env` (avoids Pump poisoning CoS).
-- Unknown UUID → medium + WARN.
+- Missing/unreadable policy → **fail closed** (`provider=policy-missing`). Does **not** default anyone (including Pump) to grok-heavy.
+- Pump UUID without an explicit policy row → `policy-row-missing` (never silent Heavy).
+- `extractAgentId` allowlist only: `agentId` / `agent.id` (ignores `source_agent_id` / `target_agent_id`).
+- Unknown UUID (with policy present) → medium + WARN.
 - `provider: codex` (Pump) → `http://127.0.0.1:10531/v1` with dummy Bearer `openai-oauth`. **Fail closed** if `~/.codex/auth.json` missing or proxy down — no Grok fallback, no Cursor fallback.
 - Hook install (`ensure-xai-inference.sh`) **rethrows** on create failure (no Cursor catch).
+
+**Before Pump GO:** log-only / smoke must prove `sessionOptions` carries the real agent UUID (slice 0). Empty `agentId` → default Heavy medium for effort seats only — Pump must not rely on empty id.
 
 ## Install on the box (desktop terminal)
 

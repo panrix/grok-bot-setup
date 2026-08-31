@@ -96,7 +96,54 @@ function check(name, fn) {
     assert.ok(r.model);
   });
 
+  await check("ignore source_agent_id / target_agent_id (allowlist only)", () => {
+    const id = mod.extractAgentId({
+      source_agent_id: COS,
+      target_agent_id: PUMP,
+      agentId: FIN,
+    });
+    assert.strictEqual(id, FIN.toLowerCase());
+    const id2 = mod.extractAgentId({
+      source_agent_id: COS,
+      target_agent_id: PUMP,
+    });
+    assert.strictEqual(id2, "");
+  });
+
+  await check("empty agentId → default medium grok-heavy (with policy)", () => {
+    const r = mod.resolveAgentInference({});
+    assert.strictEqual(r.provider, "grok-heavy");
+    assert.strictEqual(r.effort, "medium");
+    assert.strictEqual(r.agentId, "");
+  });
+
+  await check("policy missing + Pump UUID must not be grok-heavy", () => {
+    process.env.SAND_AGENT_INFERENCE_POLICY = path.join(WORKDIR, "does-not-exist.json");
+    // bust cache via new path
+    const r = mod.resolveAgentInference({ agentId: PUMP });
+    assert.notStrictEqual(r.provider, "grok-heavy");
+    assert.strictEqual(r.provider, "policy-missing");
+    process.env.SAND_AGENT_INFERENCE_POLICY = POLICY;
+    // reload real policy
+    mod.resolveAgentInference({ agentId: FIN });
+  });
+
+  await check("Pump UUID without policy row must not be grok-heavy", () => {
+    const stripped = JSON.parse(fs.readFileSync(POLICY, "utf8"));
+    delete stripped.agents[PUMP];
+    delete stripped.agents[PUMP.toLowerCase()];
+    const strippedPath = path.join(WORKDIR, "no-pump-row.json");
+    fs.writeFileSync(strippedPath, JSON.stringify(stripped));
+    process.env.SAND_AGENT_INFERENCE_POLICY = strippedPath;
+    const r = mod.resolveAgentInference({ agentId: PUMP });
+    assert.notStrictEqual(r.provider, "grok-heavy");
+    assert.strictEqual(r.provider, "policy-row-missing");
+    process.env.SAND_AGENT_INFERENCE_POLICY = POLICY;
+    mod.resolveAgentInference({ agentId: FIN });
+  });
+
   await check("createXaiPromptSession Finance effort=low", () => {
+    process.env.SAND_AGENT_INFERENCE_POLICY = POLICY;
     const s = mod.createXaiPromptSession({
       requestedModel: { modelId: "sand-default" },
       sessionOptions: { agentId: FIN },
