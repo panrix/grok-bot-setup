@@ -98,7 +98,7 @@ Applies to `fleet-heavy` cutover (with or without `--go`), **not** to `fleet-hea
 
 - Missing `--i-am-outside-chat`
 - Parent walk finds `host-main.cjs` / `sand-host` (test-only `FLEET_FORCE_INSIDE=1` requires `FLEET_ALLOW_TEST_OVERRIDES=1`)
-- `agent-data` or transcripts dir missing/unreadable (cannot prove idle/recover paused)
+- `agent-data` or transcripts dir missing/unreadable/non-traversable (cannot prove idle/recover paused)
 - `Grok-session recover` is enabled, or its JSON is unreadable/invalid
 - Host-hook watchdog is running
 - `~/.grok/auth.json` is missing. Do not `grok login` from the wrapper.
