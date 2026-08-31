@@ -128,6 +128,13 @@ assert_exit 2 "refuse if no grok oauth" \
 assert_exit 2 "refuse if transcripts missing" \
   env FLEET_TRANSCRIPTS="$WORKDIR/missing-transcripts" "$FLEET" --i-am-outside-chat
 
+chmod 000 "$WORKDIR/agent-data"
+assert_exit 2 "refuse if agent-data unreadable" \
+  "$FLEET" --i-am-outside-chat
+chmod 755 "$WORKDIR/agent-data"
+# restore nested perms after parent chmod 000
+chmod -R u+rwX "$WORKDIR/agent-data" 2>/dev/null || true
+
 touch "$WORKDIR/agent-data/agent-transcripts/tiny/tiny.jsonl"
 assert_exit 2 "refuse if jsonl hot" \
   env FLEET_HOT_SECONDS=60 "$FLEET" --i-am-outside-chat

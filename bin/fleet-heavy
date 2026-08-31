@@ -284,11 +284,14 @@ enforce_gates() {
   if [[ ! -d "$AGENT_DATA" ]]; then
     refuse "agent-data missing or unreadable at $AGENT_DATA. Cannot prove recover is paused."
   fi
+  if [[ ! -r "$AGENT_DATA" || ! -x "$AGENT_DATA" ]]; then
+    refuse "agent-data not readable/traversable at $AGENT_DATA. Cannot prove recover is paused."
+  fi
   if [[ ! -d "$TRANSCRIPTS" ]]; then
     refuse "transcripts missing or unreadable at $TRANSCRIPTS. Cannot prove office is idle."
   fi
-  if [[ ! -r "$TRANSCRIPTS" ]]; then
-    refuse "transcripts not readable at $TRANSCRIPTS. Cannot prove office is idle."
+  if [[ ! -r "$TRANSCRIPTS" || ! -x "$TRANSCRIPTS" ]]; then
+    refuse "transcripts not readable/traversable at $TRANSCRIPTS. Cannot prove office is idle."
   fi
   local rec
   rec="$(recover_enabled || true)"
