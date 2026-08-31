@@ -659,6 +659,210 @@ function reasoningEffort() {
   return s;
 }
 
+/** Policy path — read only; never write SAND_* back into process.env. */
+function policyFilePath() {
+  return (
+    process.env.SAND_AGENT_INFERENCE_POLICY ||
+    path.join(process.env.SAND_DATA_ROOT || path.join(os.homedir(), "sand-data"), "agent-inference-policy.json")
+  );
+}
+
+let _policyCache = { mtimeMs: -1, path: "", data: null };
+
+function loadAgentPolicy() {
+  const file = policyFilePath();
+  let st;
+  try {
+    st = fs.statSync(file);
+  } catch {
+    _policyCache = { mtimeMs: -1, path: file, data: null };
+    return null;
+  }
+  if (_policyCache.path === file && _policyCache.mtimeMs === st.mtimeMs && _policyCache.data) {
+    return _policyCache.data;
+  }
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (err) {
+    console.error(`[sand-xai] policy unreadable at ${file}: ${err && err.message ? err.message : err}`);
+    _policyCache = { mtimeMs: st.mtimeMs, path: file, data: null };
+    return null;
+  }
+  _policyCache = { mtimeMs: st.mtimeMs, path: file, data };
+  return data;
+}
+
+function isUuid(s) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s || "").trim());
+}
+
+function extractAgentId(sessionOptions, options) {
+  const opts = options || {};
+  const so = sessionOptions || {};
+  const candidates = [
+    opts.agentId,
+    so.agentId,
+    so.agentID,
+    so.agent_id,
+    so.agentUuid,
+    so.agentUUID,
+    so.agent && so.agent.id,
+    so.agent && so.agent.agentId,
+    so.conversation && so.conversation.agentId,
+    so.conversation && so.conversation.agent && so.conversation.agent.id,
+    so.metadata && so.metadata.agentId,
+    so.sandAgentId,
+    so.boxAgentId,
+  ];
+  for (const c of candidates) {
+    const s = asString(c).trim();
+    if (isUuid(s)) return s.toLowerCase();
+  }
+  // shallow walk: any uuid under a key that looks agent-related
+  const stack = [so];
+  let depth = 0;
+  while (stack.length && depth < 40) {
+    depth += 1;
+    const cur = stack.pop();
+    if (!cur || typeof cur !== "object") continue;
+    for (const [k, v] of Object.entries(cur)) {
+      if (typeof v === "string" && /agent/i.test(k) && isUuid(v)) return v.toLowerCase();
+      if (v && typeof v === "object" && depth < 6) stack.push(v);
+    }
+  }
+  return "";
+}
+
+function normalizeEffort(v) {
+  if (v == null || v === "") return undefined;
+  const s = String(v).toLowerCase().trim();
+  if (s === "off" || s === "none" || s === "disabled") return undefined;
+  if (s === "low" || s === "medium" || s === "high" || s === "xhigh") return s;
+  return s;
+}
+
+/**
+ * Resolve per-agent overlay. Locals only — never mutates process.env.
+ * Unknown UUID → default effort medium + WARN.
+ */
+function resolveAgentInference(sessionOptions, options) {
+  const policy = loadAgentPolicy();
+  const agentId = extractAgentId(sessionOptions, options);
+  const defaults = (policy && policy.default) || {};
+  const row =
+    agentId && policy && policy.agents && typeof policy.agents === "object"
+      ? policy.agents[agentId] || policy.agents[agentId.toLowerCase()]
+      : null;
+
+  if (agentId && policy && policy.agents && !row) {
+    console.error(`[sand-xai] WARN unknown agent uuid=${agentId} — using default effort=medium`);
+  }
+
+  const provider = asString((row && row.provider) || defaults.provider || "grok-heavy").toLowerCase() || "grok-heavy";
+  const model =
+    asString((row && row.model) || defaults.model || "").trim() ||
+    env("SAND_XAI_MODEL", "grok-4.6");
+  let effort = normalizeEffort((row && row.effort) != null ? row.effort : defaults.effort);
+  if (effort == null && provider === "grok-heavy") {
+    effort = normalizeEffort(env("SAND_XAI_REASONING_EFFORT", "medium")) || "medium";
+  }
+  const label = asString((row && row.label) || agentId || "unknown");
+
+  return {
+    agentId: agentId || "",
+    label,
+    provider,
+    model,
+    effort,
+    known: Boolean(row),
+  };
+}
+
+function resolveGrokHeavyAuth() {
+  const auth = resolveAuth();
+  return { ...auth, provider: "grok-heavy" };
+}
+
+function resolveCodexAuth() {
+  const authFile = process.env.CODEX_AUTH_FILE || path.join(os.homedir(), ".codex", "auth.json");
+  if (!fs.existsSync(authFile)) {
+    const err = new Error(
+      "Pump/Codex requires ~/.codex/auth.json — run from desktop terminal: codex login --device-auth (do not fall back to Grok)"
+    );
+    err.code = "CODEX_AUTH_MISSING";
+    throw err;
+  }
+  const baseUrl = (
+    process.env.SAND_CODEX_BASE_URL ||
+    "http://127.0.0.1:10531/v1"
+  ).replace(/\/+$/, "");
+  return {
+    mode: "key",
+    token: "openai-oauth",
+    baseUrl,
+    extraHeaders: {},
+    provider: "codex",
+    authFile,
+  };
+}
+
+/** Async probe: Codex proxy must answer. Fail closed — never route Pump to Grok. */
+function probeCodexProxy(baseUrl) {
+  return new Promise((resolve) => {
+    try {
+      const u = new URL(`${baseUrl}/models`);
+      const lib = u.protocol === "https:" ? https : http;
+      const req = lib.request(
+        {
+          protocol: u.protocol,
+          hostname: u.hostname,
+          port: u.port || (u.protocol === "https:" ? 443 : 80),
+          path: `${u.pathname}${u.search}`,
+          method: "GET",
+          timeout: 2000,
+          headers: { Authorization: "Bearer openai-oauth" },
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode && res.statusCode < 500);
+        }
+      );
+      req.on("timeout", () => {
+        req.destroy();
+        resolve(false);
+      });
+      req.on("error", () => resolve(false));
+      req.end();
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+async function resolveSessionAuth(inference) {
+  if (inference.provider === "codex") {
+    const auth = resolveCodexAuth();
+    const ok = await probeCodexProxy(auth.baseUrl);
+    if (!ok) {
+      const err = new Error(
+        `Codex/openai-oauth proxy not reachable at ${auth.baseUrl} — start it (adapters start openai-oauth). Pump will NOT fall back to Grok.`
+      );
+      err.code = "CODEX_PROXY_DOWN";
+      throw err;
+    }
+    return auth;
+  }
+  if (inference.provider !== "grok-heavy") {
+    const err = new Error(
+      `unsupported provider '${inference.provider}' in agent-inference-policy (allowed: grok-heavy, codex)`
+    );
+    err.code = "BAD_PROVIDER";
+    throw err;
+  }
+  return resolveGrokHeavyAuth();
+}
+
 function httpPostStream(urlString, { headers, body, onData }) {
   const u = new URL(urlString);
   const lib = u.protocol === "https:" ? https : http;
@@ -765,7 +969,7 @@ function errorResult(modelId, invocationId, err) {
   };
 }
 
-async function runStream({ model, messages, tools, invocationId, auth }) {
+async function runStream({ model, messages, tools, invocationId, auth, effort }) {
   const converted = trimConvertedMessages(convertMessages(messages), model);
   debugDump(messages, converted);
   const openaiTools = convertTools(tools);
@@ -790,8 +994,14 @@ async function runStream({ model, messages, tools, invocationId, auth }) {
   }
   const mt = maxTokens();
   if (mt != null) body.max_tokens = mt;
-  const effort = thinkingEnabled() ? reasoningEffort() : undefined;
-  if (effort) body.reasoning_effort = effort;
+  // Per-session effort from policy (locals). Do not read/write process.env here for effort.
+  let useEffort = effort;
+  if (useEffort == null && auth.provider !== "codex") {
+    useEffort = thinkingEnabled() ? reasoningEffort() : undefined;
+  }
+  if (useEffort && auth.provider !== "codex") {
+    body.reasoning_effort = useEffort;
+  }
 
   const url = `${auth.baseUrl}/chat/completions`;
   const toolAcc = new Map();
@@ -930,13 +1140,21 @@ function createExecutor(session) {
       }
       const processing = (async () => {
         loadEnvFile();
-        const auth = resolveAuth();
-        const model = mapModelId(session.requestedModel);
+        const inference = session.inference || resolveAgentInference(session.sessionOptions, {
+          agentId: session.agentId,
+        });
+        let auth;
+        try {
+          auth = await resolveSessionAuth(inference);
+        } catch (err) {
+          return errorResult(inference.model || "unknown", invocationId, err);
+        }
+        const model = inference.model || mapModelId(session.requestedModel);
         if (auth.mode === "none") {
           return errorResult(
             model,
             invocationId,
-            new Error("no XAI_API_KEY and no ~/.grok/auth.json session — run adapters use … or grok login")
+            new Error("no XAI_API_KEY and no ~/.grok/auth.json session — run grok login --device-auth")
           );
         }
         return runStream({
@@ -945,6 +1163,7 @@ function createExecutor(session) {
           tools,
           invocationId,
           auth,
+          effort: inference.effort,
         });
       })();
 
@@ -969,20 +1188,23 @@ function createXaiPromptSession(options) {
   loadEnvFile();
   const opts = options || {};
   const requestedModel = opts.requestedModel;
-  const model = mapModelId(requestedModel);
-  const auth = resolveAuth();
-  const thinking = env("SAND_XAI_THINKING", "disabled");
-  const effort = env("SAND_XAI_REASONING_EFFORT", "");
+  const sessionOptions = opts.sessionOptions;
+  const inference = resolveAgentInference(sessionOptions, opts);
+
   console.error(
-    `[sand-xai] session model=${model} auth=${auth.mode} base=${auth.baseUrl} thinking=${thinking}` +
-      (effort ? ` effort=${effort}` : "")
+    `[sand-xai] agent=${inference.agentId || inference.label} effort=${inference.effort || "none"} model=${inference.model} provider=${inference.provider}`
   );
+
   const session = {
     requestedModel,
     onRequestId: opts.onRequestId,
-    sessionOptions: opts.sessionOptions,
+    sessionOptions,
+    agentId: inference.agentId,
+    inference,
     getModelId() {
-      return mapModelId(this.requestedModel);
+      return this.inference && this.inference.model
+        ? this.inference.model
+        : mapModelId(this.requestedModel);
     },
     getExecutor(initialMessages) {
       const ex = createExecutor(session);
@@ -999,6 +1221,11 @@ module.exports = {
   normalizeToolParameters,
   mapModelId,
   trimConvertedMessages,
+  extractAgentId,
+  resolveAgentInference,
+  loadAgentPolicy,
+  resolveSessionAuth,
+  policyFilePath,
 };
 
 if (require.main === module) {

@@ -34,10 +34,14 @@
     "scripts/restore-after-reset.sh",
     "scripts/bootstrap.sh",
     "scripts/test-fleet-heavy.sh",
+    "scripts/test-agent-inference-policy.sh",
+    "scripts/test-agent-inference-policy.js",
     "bin/fleet-heavy",
     "bin/fleet-status",
     "docs/FLEET_HEAVY_CUTOVER.md",
+    "docs/AGENT_INFERENCE_POLICY.md",
     "examples/cliproxy-openai-compat.yaml",
+    "examples/agent-inference-policy.json",
     "docs/GUIDE_CUSTOM_INFERENCE.md",
     "README.md",
     "LICENSE"
@@ -53,6 +57,6 @@
   "scripts": {
     "adapters": "bash ./adapters.sh",
     "prepack": "test -x adapters.sh",
-    "test": "bash -n adapters.sh && bash -n adapters && bash -n bin/fleet-heavy && bash -n bin/fleet-status && bash -n scripts/ensure-xai-inference.sh && bash -n scripts/restore-after-reset.sh && bash -n scripts/bootstrap.sh && bash -n scripts/test-fleet-heavy.sh && bash ./adapters.sh help >/dev/null && bash ./scripts/test-fleet-heavy.sh"
+    "test": "bash -n adapters.sh && bash -n adapters && bash -n bin/fleet-heavy && bash -n bin/fleet-status && bash -n scripts/ensure-xai-inference.sh && bash -n scripts/restore-after-reset.sh && bash -n scripts/bootstrap.sh && bash -n scripts/test-fleet-heavy.sh && bash -n scripts/test-agent-inference-policy.sh && bash ./adapters.sh help >/dev/null && bash ./scripts/test-fleet-heavy.sh && bash ./scripts/test-agent-inference-policy.sh"
   }
 }
