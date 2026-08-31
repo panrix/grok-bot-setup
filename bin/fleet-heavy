@@ -30,6 +30,9 @@ WANT_GO=0
 OUTSIDE_CHAT=0
 MODE="cutover"
 EXIT_REFUSE=2
+# Epoch at cutover start — refuse if any jsonl mutates during slow preflight
+# (hot window alone can miss writes when preflight lasts longer than HOT_SECONDS).
+CUTOVER_T0=""
 
 log()  { printf '+ %s\n' "$*"; }
 warn() { printf '! %s\n' "$*" >&2; }
@@ -126,6 +129,14 @@ hot_jsonls() {
     return 0
   fi
   find "$TRANSCRIPTS" -name '*.jsonl' -newermt "-${HOT_SECONDS} seconds" 2>/dev/null || true
+}
+
+# jsonl touched at or after cutover start (preflight race)
+mutated_since_t0() {
+  if [[ -z "${CUTOVER_T0:-}" || ! -d "$TRANSCRIPTS" ]]; then
+    return 0
+  fi
+  find "$TRANSCRIPTS" -name '*.jsonl' -newermt "@${CUTOVER_T0}" 2>/dev/null || true
 }
 
 jsonl_table() {
@@ -225,6 +236,11 @@ enforce_gates() {
   if [[ -n "$hot" ]]; then
     refuse "office jsonl is hot (mid-turn). Idle first. Hot files:"$'\n'"$hot"
   fi
+  local mutated
+  mutated="$(mutated_since_t0)"
+  if [[ -n "$mutated" ]]; then
+    refuse "office jsonl mutated during preflight. Idle and re-run. Changed:"$'\n'"$mutated"
+  fi
 }
 
 run_go() {
@@ -262,6 +278,7 @@ main() {
     preflight
     exit 0
   fi
+  CUTOVER_T0="${FLEET_CUTOVER_T0:-$(date +%s)}"
   preflight
   enforce_gates
   if [[ "$WANT_GO" -eq 1 ]]; then

@@ -103,6 +103,14 @@ assert_exit 2 "refuse if jsonl hot" \
   env FLEET_HOT_SECONDS=60 "$FLEET" --i-am-outside-chat
 touch -d "10 minutes ago" "$WORKDIR/agent-data/agent-transcripts/tiny/tiny.jsonl"
 
+# Mutation during preflight: file newer than CUTOVER_T0 but outside the hot window.
+# Simulates a turn that started at cutover start then went idle before the final gate.
+touch -d "5 seconds ago" "$WORKDIR/agent-data/agent-transcripts/tiny/tiny.jsonl"
+assert_exit 2 "refuse if jsonl mutated since cutover t0" \
+  env FLEET_HOT_SECONDS=1 FLEET_CUTOVER_T0="$(( $(date +%s) - 30 ))" \
+  "$FLEET" --i-am-outside-chat
+touch -d "10 minutes ago" "$WORKDIR/agent-data/agent-transcripts/tiny/tiny.jsonl"
+
 : > "$FLEET_STUB_LOG"
 assert_exit 0 "dry-run succeeds" \
   "$FLEET" --i-am-outside-chat

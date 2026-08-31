@@ -2,7 +2,7 @@
 
 **Date:** 31 Aug 2026
 **Status:** story + dry-run CLI on this PR. No live switch. Merge/deploy later GO.
-**Owner:** CoS opened this PR via the VPS `GITHUB_TOKEN`. Terra QAs. tmux Grok is not briefed until Terra SHIPs. Ricky GOs the first flick from a non-chat shell.
+**Owner:** Opened as `panrix:feat/fleet-heavy` → BlockedPath PR #3 via VPS `gh` (panrix). Do not use the dead `GITHUB_TOKEN` PAT. Terra QAs. Ricky GOs the first flick from a non-chat shell on Grok Bot's computer.
 
 This is how we move every office Grok Bot agent off the Cursor meter onto SuperGrok Heavy when the weekly Grok Bot cap is gone, without repeating the hours-long crash.
 
@@ -100,6 +100,7 @@ VPS tmux cannot SIGTERM this host unless we add a later bridge. First version: R
 - Host-hook watchdog is running
 - `~/.grok/auth.json` is missing. Do not `grok login` from the wrapper.
 - Any office jsonl is hot in the last N seconds (mid-turn)
+- Any office jsonl mutates at or after cutover start (preflight race; covers the case where preflight lasts longer than the hot window)
 
 ### 4.2 Default is dry-run
 
@@ -145,7 +146,7 @@ Cursor Ultra ends 8 September 2026. Then link Heavy on the Grok Bot Plan screen 
 **What is still weak**
 
 - Restart still reloads the 56.5 MiB CoS jsonl. External flick avoids *self-kill*, not *fat-chat reload*. First smoke is a **small** agent (Finance), not CoS. CoS last.
-- No real pause API. "Idle" is a jsonl mtime heuristic. A turn can start between check and SIGTERM. `--go` window is short; fail closed if any jsonl mutates during preflight.
+- No real pause API. "Idle" is a jsonl mtime heuristic. A turn can still start between the final gate and SIGTERM. The wrapper also refuses if any jsonl mutates after cutover start (covers slow preflight vs short hot window). Residual race after the last check remains.
 - VPS tmux cannot yet press the button on this host. First ship is local CLI plus a printed command. Remote SSH/bridge is a later GO.
 - Overnight Cursor host wipes will drop the hook again. After we are on Heavy, the paused recover job / watchdog need a **separate** GO.
 - Fat transcripts are the underlying disease. This switch does not compact CoS. Do not auto-trim jsonl in the wrapper.
@@ -158,7 +159,7 @@ Cursor Ultra ends 8 September 2026. Then link Heavy on the Grok Bot Plan screen 
 - Delete CoS to "make the file smaller".
 - Install a second CoS as the happy path.
 - Gas Town / Kilroy / HQ as the switcher.
-- Brief tmux:grok until Terra SHIPs this PR.
+- Live flick / remote bridge / re-arm recover-watchdog without Ricky GO.
 
 ---
 
