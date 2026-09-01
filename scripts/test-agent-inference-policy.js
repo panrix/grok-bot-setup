@@ -111,11 +111,40 @@ function check(name, fn) {
     assert.strictEqual(id2, "");
   });
 
-  await check("empty agentId → default medium grok-heavy (with policy)", () => {
+  await check("empty agentId → fleet default medium, not high (overlay refused)", () => {
     const r = mod.resolveAgentInference({});
     assert.strictEqual(r.provider, "grok-heavy");
     assert.strictEqual(r.effort, "medium");
     assert.strictEqual(r.agentId, "");
+    assert.strictEqual(r.known, false);
+  });
+
+  await check("hostOptions.agentId UUID is used", () => {
+    const r = mod.resolveAgentInference(
+      {},
+      { hostOptions: { agentId: COS } }
+    );
+    assert.strictEqual(r.agentId, COS.toLowerCase());
+    assert.strictEqual(r.effort, "high");
+    assert.strictEqual(r.known, true);
+  });
+
+  await check("hostOptions.getAgentId() UUID is used", () => {
+    const r = mod.resolveAgentInference(
+      {},
+      { hostOptions: { getAgentId: () => DEV } }
+    );
+    assert.strictEqual(r.agentId, DEV.toLowerCase());
+    assert.strictEqual(r.effort, "high");
+  });
+
+  await check("ignore source_agent_id even on hostOptions", () => {
+    const r = mod.resolveAgentInference(
+      { source_agent_id: COS },
+      { hostOptions: { source_agent_id: PUMP } }
+    );
+    assert.strictEqual(r.agentId, "");
+    assert.strictEqual(r.effort, "medium");
   });
 
   await check("policy missing + Pump UUID must not be grok-heavy", () => {

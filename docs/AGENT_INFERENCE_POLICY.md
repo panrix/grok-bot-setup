@@ -34,7 +34,7 @@ grep 'sessionOptions keys' /tmp/sand-host-manual.log | tail -20
 grep '\[sand-xai\] agent=' /tmp/sand-host-manual.log | tail -20
 ```
 
-Need a real UUID in `extracted agentId=…`. If `(empty)`, CoS/Dev/Pump stay default medium. Patch `host-main` to pass `agentId` before trusting high, and before the Codex module. Unset the dump flag after.
+Need a real UUID in `extracted agentId=…`. Live slice-0 (1 Sep) proved `sessionOptions` has **no** `agentId` key. Empty identity **refuses the per-agent overlay** (fleet default medium, never high). The hook now also passes `hostOptions` (`options2`) and dumps those keys. If that is also empty, overlay cannot SHIP until host-main exposes a UUID. Unset the dump flag after.
 
 ## Install on the box (desktop terminal)
 

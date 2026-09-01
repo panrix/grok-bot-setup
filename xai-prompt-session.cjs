@@ -767,10 +767,20 @@ function isUuid(s) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s || "").trim());
 }
 
+function callAllowlistedGetter(obj, name) {
+  if (!obj || typeof obj[name] !== "function") return "";
+  try {
+    return obj[name]();
+  } catch {
+    return "";
+  }
+}
+
 function extractAgentId(sessionOptions, options) {
   // Allowlist only — do NOT walk source_agent_id / target_agent_id /agent/i keys.
   const opts = options || {};
   const so = sessionOptions || {};
+  const ho = opts.hostOptions || opts.options2 || null;
   const candidates = [
     opts.agentId,
     so.agentId,
@@ -778,6 +788,13 @@ function extractAgentId(sessionOptions, options) {
     so.agent_id,
     so.agent && so.agent.id,
     so.agent && so.agent.agentId,
+    ho && ho.agentId,
+    ho && ho.agentID,
+    ho && ho.agent_id,
+    ho && ho.agent && ho.agent.id,
+    ho && ho.agent && ho.agent.agentId,
+    callAllowlistedGetter(ho, "getAgentId"),
+    callAllowlistedGetter(ho, "getAgentID"),
   ];
   for (const c of candidates) {
     const s = asString(c).trim();
@@ -825,8 +842,33 @@ function resolveAgentInference(sessionOptions, options) {
   }
 
   const defaults = policy.default || {};
+
+  // Slice-0 FAIL: live sessionOptions has no agentId. Do not apply a per-agent
+  // row (never silent high / never Pump-row). Fleet default only.
+  if (!agentId) {
+    console.error(
+      `[sand-xai] REFUSE per-agent overlay: empty agentId — no identity on sessionOptions/hostOptions; using fleet default medium (not high)`
+    );
+    const provider =
+      asString(defaults.provider || "grok-heavy").toLowerCase() || "grok-heavy";
+    const model =
+      asString(defaults.model || "").trim() || env("SAND_XAI_MODEL", "grok-4.6");
+    let effort = normalizeEffort(defaults.effort);
+    if (effort == null && provider === "grok-heavy") {
+      effort = normalizeEffort(env("SAND_XAI_REASONING_EFFORT", "medium")) || "medium";
+    }
+    return {
+      agentId: "",
+      label: "unknown",
+      provider,
+      model,
+      effort,
+      known: false,
+    };
+  }
+
   const row =
-    agentId && policy.agents && typeof policy.agents === "object"
+    policy.agents && typeof policy.agents === "object"
       ? policy.agents[agentId] || policy.agents[agentId.toLowerCase()]
       : null;
 
@@ -1291,19 +1333,41 @@ function createXaiPromptSession(options) {
   // Slice 0: log key paths only (no values) when SAND_XAI_DUMP_SESSION_KEYS=1
   if (truthy(process.env.SAND_XAI_DUMP_SESSION_KEYS)) {
     try {
-      const keys = [];
-      const walk = (obj, prefix, depth) => {
-        if (!obj || typeof obj !== "object" || depth > 3) return;
-        for (const k of Object.keys(obj)) {
-          const p = prefix ? `${prefix}.${k}` : k;
-          keys.push(p);
-          const v = obj[k];
-          if (v && typeof v === "object" && !Array.isArray(v) && depth < 2) walk(v, p, depth + 1);
+      const collectKeys = (obj) => {
+        const keys = [];
+        if (!obj || typeof obj !== "object") return keys;
+        const seen = new Set();
+        const add = (k) => {
+          if (!k || seen.has(k)) return;
+          seen.add(k);
+          keys.push(k);
+        };
+        try {
+          Object.keys(obj).forEach(add);
+        } catch {
+          /* ignore */
         }
+        try {
+          Object.getOwnPropertyNames(obj).forEach(add);
+        } catch {
+          /* ignore */
+        }
+        try {
+          const proto = Object.getPrototypeOf(obj);
+          if (proto && proto !== Object.prototype) {
+            Object.getOwnPropertyNames(proto).forEach((k) => {
+              if (k !== "constructor") add(`proto.${k}`);
+            });
+          }
+        } catch {
+          /* ignore */
+        }
+        return keys.slice(0, 80);
       };
-      walk(sessionOptions || {}, "", 0);
+      const soKeys = collectKeys(sessionOptions);
+      const hoKeys = collectKeys(opts.hostOptions);
       console.error(
-        `[sand-xai] sessionOptions keys (no values): ${keys.slice(0, 80).join(", ") || "(none)"} | extracted agentId=${inference.agentId || "(empty)"}`
+        `[sand-xai] sessionOptions keys (no values): ${soKeys.join(", ") || "(none)"} | hostOptions keys: ${hoKeys.join(", ") || "(none)"} | extracted agentId=${inference.agentId || "(empty)"}`
       );
     } catch (e) {
       console.error(`[sand-xai] sessionOptions key dump failed: ${e && e.message ? e.message : e}`);
