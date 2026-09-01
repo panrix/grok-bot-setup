@@ -794,9 +794,10 @@ function normalizeEffort(v) {
   return s;
 }
 
-/** UUIDs that must never silently default to grok-heavy without an explicit policy row. */
+/** UUIDs that must never silently default without an explicit policy row. */
 const REQUIRE_EXPLICIT_ROW = {
-  "8ae9a103-cfa2-406d-9bf3-eea00ca5b3a9": "codex", // Pump — never accidental Heavy
+  // Pump: this slice grok-heavy high; next module flips the row to Codex.
+  "8ae9a103-cfa2-406d-9bf3-eea00ca5b3a9": "pump-row",
 };
 
 /**

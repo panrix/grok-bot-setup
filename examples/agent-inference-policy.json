@@ -22,12 +22,13 @@
       "label": "finance",
       "provider": "grok-heavy",
       "model": "grok-4.6",
-      "effort": "low"
+      "effort": "medium"
     },
     "8ae9a103-cfa2-406d-9bf3-eea00ca5b3a9": {
       "label": "pump",
-      "provider": "codex",
-      "model": "gpt-5.4-mini"
+      "provider": "grok-heavy",
+      "model": "grok-4.6",
+      "effort": "high"
     }
   }
 }

@@ -77,9 +77,9 @@ function check(name, fn) {
     assert.strictEqual(r.effort, "high");
   });
 
-  await check("Finance → low", () => {
+  await check("Finance → medium (rest of office)", () => {
     const r = mod.resolveAgentInference({ agentId: FIN });
-    assert.strictEqual(r.effort, "low");
+    assert.strictEqual(r.effort, "medium");
     assert.strictEqual(r.provider, "grok-heavy");
   });
 
@@ -90,10 +90,11 @@ function check(name, fn) {
     assert.strictEqual(r.known, false);
   });
 
-  await check("Pump → codex (not grok-heavy)", () => {
+  await check("Pump → high grok-heavy (Codex is next module)", () => {
     const r = mod.resolveAgentInference({ agentId: PUMP });
-    assert.strictEqual(r.provider, "codex");
-    assert.ok(r.model);
+    assert.strictEqual(r.provider, "grok-heavy");
+    assert.strictEqual(r.effort, "high");
+    assert.strictEqual(r.model, "grok-4.6");
   });
 
   await check("ignore source_agent_id / target_agent_id (allowlist only)", () => {
@@ -142,14 +143,23 @@ function check(name, fn) {
     mod.resolveAgentInference({ agentId: FIN });
   });
 
-  await check("createXaiPromptSession Finance effort=low", () => {
+  await check("createXaiPromptSession Finance effort=medium", () => {
     process.env.SAND_AGENT_INFERENCE_POLICY = POLICY;
     const s = mod.createXaiPromptSession({
       requestedModel: { modelId: "sand-default" },
       sessionOptions: { agentId: FIN },
     });
-    assert.strictEqual(s.inference.effort, "low");
+    assert.strictEqual(s.inference.effort, "medium");
     assert.strictEqual(s.getModelId(), "grok-4.6");
+  });
+
+  await check("createXaiPromptSession Pump effort=high", () => {
+    const s = mod.createXaiPromptSession({
+      requestedModel: { modelId: "sand-default" },
+      sessionOptions: { agentId: PUMP },
+    });
+    assert.strictEqual(s.inference.effort, "high");
+    assert.strictEqual(s.inference.provider, "grok-heavy");
   });
 
   await check("policy does not mutate SAND_XAI_REASONING_EFFORT", () => {
@@ -161,11 +171,14 @@ function check(name, fn) {
     assert.ok(!process.env.SAND_XAI_BASE_URL);
   });
 
-  await check("Codex auth missing fails closed", async () => {
-    const r = mod.resolveAgentInference({ agentId: PUMP });
+  await check("Codex provider path still fail-closed (next module)", async () => {
     let threw = false;
     try {
-      await mod.resolveSessionAuth(r);
+      await mod.resolveSessionAuth({
+        provider: "codex",
+        model: "gpt-5.4-mini",
+        agentId: PUMP,
+      });
     } catch (e) {
       threw = true;
       assert.ok(

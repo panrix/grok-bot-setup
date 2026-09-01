@@ -55,4 +55,4 @@ Stub fixtures only. No live `auth.x.ai`. No `--go`. No host restart.
 
 ## Still open (inherited from #4 — do not skip)
 
-Empty `agentId` still resolves default Heavy medium. Before Pump GO, log-only slice 0: `SAND_XAI_DUMP_SESSION_KEYS=1` dumps `sessionOptions` **keys only** (no bodies). If the live host does not pass `agentId`, Pump cannot be fenced.
+Empty `agentId` still resolves default Heavy medium. Before trusting CoS/Dev/Pump **high** (and before the later Pump→Codex module), log-only slice 0: `SAND_XAI_DUMP_SESSION_KEYS=1` dumps `sessionOptions` **keys only** (no bodies). If the live host does not pass `agentId`, those seats stay medium.
