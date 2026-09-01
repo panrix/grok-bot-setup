@@ -200,31 +200,93 @@ function mapModelId(requestedModel) {
   return raw;
 }
 
-function grokSessionToken() {
+const GROK_AUTH_SOON_SECONDS = 7200; // 2h — same constant as scripts/token-expired.py
+
+function parseGrokExpiresAt(exp) {
+  if (exp == null || exp === "") return null;
+  if (typeof exp === "number" && Number.isFinite(exp)) {
+    let ts = exp;
+    if (ts > 1e12) ts /= 1000;
+    return ts;
+  }
+  const ms = Date.parse(String(exp).replace("Z", "+00:00"));
+  if (Number.isNaN(ms)) return null;
+  return ms / 1000;
+}
+
+function pickGrokAuthEntry(data) {
+  if (!data || typeof data !== "object") return null;
+  for (const [k, v] of Object.entries(data)) {
+    if (v && typeof v === "object" && v.key && (k.includes("auth.x.ai") || v.auth_mode === "oidc")) {
+      return v;
+    }
+  }
+  for (const v of Object.values(data)) {
+    if (v && typeof v === "object" && v.key) return v;
+  }
+  return null;
+}
+
+function readGrokAuth() {
   const authPath = env("GROK_AUTH_FILE", path.join(os.homedir(), ".grok", "auth.json"));
+  const result = {
+    authPath,
+    exists: false,
+    has_key: false,
+    expires_at: "",
+    seconds_left: null,
+    status: "EXPIRED",
+    entry: null,
+  };
+  if (!fs.existsSync(authPath)) return result;
+  result.exists = true;
   let data;
   try {
     data = JSON.parse(fs.readFileSync(authPath, "utf8"));
   } catch {
+    return result;
+  }
+  const entry = pickGrokAuthEntry(data);
+  if (!entry || !entry.key) return result;
+  result.entry = entry;
+  result.has_key = true;
+  const raw = entry.expires_at || entry.expiresAt;
+  const epoch = parseGrokExpiresAt(raw);
+  if (epoch == null) {
+    result.status = "ok";
+    return result;
+  }
+  result.expires_at = typeof raw === "string" ? String(raw) : new Date(epoch * 1000).toISOString();
+  result.seconds_left = Math.floor(epoch - Date.now() / 1000);
+  if (result.seconds_left < 0) result.status = "EXPIRED";
+  else if (result.seconds_left < GROK_AUTH_SOON_SECONDS) result.status = "soon";
+  else result.status = "ok";
+  return result;
+}
+
+/** Probe only — never includes key / refresh_token / email. */
+function grokAuthProbe() {
+  const r = readGrokAuth();
+  return {
+    exists: r.exists,
+    has_key: r.has_key,
+    expires_at: r.expires_at,
+    seconds_left: r.seconds_left,
+    status: r.status,
+  };
+}
+
+function grokSessionToken() {
+  const r = readGrokAuth();
+  if (r.status === "EXPIRED") {
+    if (r.has_key) {
+      console.error(
+        `[sand-xai] GROK_AUTH_EXPIRED expires_at=${r.expires_at} seconds_left=${r.seconds_left}`
+      );
+    }
     return "";
   }
-  if (!data || typeof data !== "object") return "";
-  let entry = null;
-  for (const [k, v] of Object.entries(data)) {
-    if (v && typeof v === "object" && v.key && (k.includes("auth.x.ai") || v.auth_mode === "oidc")) {
-      entry = v;
-      break;
-    }
-  }
-  if (!entry) {
-    for (const v of Object.values(data)) {
-      if (v && typeof v === "object" && v.key) {
-        entry = v;
-        break;
-      }
-    }
-  }
-  return entry && entry.key ? String(entry.key) : "";
+  return r.entry && r.entry.key ? String(r.entry.key) : "";
 }
 
 function resolveAuth() {
@@ -237,6 +299,14 @@ function resolveAuth() {
       baseUrl: env("SAND_XAI_BASE_URL", "https://api.x.ai/v1").replace(/\/+$/, ""),
       extraHeaders: {},
     };
+  }
+  const probe = grokAuthProbe();
+  if (probe.status === "EXPIRED" && probe.has_key) {
+    const err = new Error(
+      `GROK_AUTH_EXPIRED expires_at=${probe.expires_at} seconds_left=${probe.seconds_left}`
+    );
+    err.code = "GROK_AUTH_EXPIRED";
+    throw err;
   }
   const session = grokSessionToken();
   return {
@@ -1274,6 +1344,9 @@ module.exports = {
   loadAgentPolicy,
   resolveSessionAuth,
   policyFilePath,
+  grokSessionToken,
+  grokAuthProbe,
+  resolveAuth,
 };
 
 if (require.main === module) {

@@ -137,6 +137,20 @@ bash ./scripts/test-fleet-heavy.sh             # stub adapters only; never hits 
 
 Story, blast radius, and the why-last-time-crashed notes: [`docs/FLEET_HEAVY_CUTOVER.md`](docs/FLEET_HEAVY_CUTOVER.md).
 
+### Grok OAuth keepalive (probe only)
+
+Host `/health` 200 does **not** mean the access `key` in `~/.grok/auth.json` is live. Probe before a weekly Cursor → Heavy cutover. Never from chat. Never `--go`.
+
+```bash
+./bin/grok-auth-status                 # exists / has_key / expires_at / ok|soon|EXPIRED
+./bin/grok-auth-cutover-status         # hook + oauth + watchdog pid + recover armed?
+bash ./scripts/refresh-grok-if-expired.sh   # skip, or grok models, or refresh-failed
+# if EXPIRED: /home/box/.grok/bin/grok login --device-auth   (human, desktop)
+bash ./scripts/test-grok-auth-keepalive.sh  # stub fixtures; never live login
+```
+
+Two doors (do not weld): hook missing → `adapters.sh recover` / `fleet-heavy --go` (Ricky, paused). Token dead → M1 / human device-auth. Do not start `host-hook-watchdog.sh` from the oauth path. Details: [`docs/GROK_AUTH_KEEPALIVE.md`](docs/GROK_AUTH_KEEPALIVE.md).
+
 ### Install targets
 
 `all` · `cliproxy` · `litellm` · `openai-oauth` · `claude` · `grok` · `codex` · `herdr` · `ghostty` · `tailscale` · `zellij` · `lazygit` · `login-agents`
