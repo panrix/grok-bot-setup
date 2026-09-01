@@ -1,29 +1,24 @@
-# GO packet — Heavy OAuth keepalive (docs bench)
+# GO packet — whole Heavy stack (docs bench)
 
-**For:** external builder / factory QC. CoS will review after you open the implementation PR.  
-**This branch:** docs only. Do **not** implement on this PR unless Ricky says so — open a **new** implementation PR that cites this one.
+**For:** external builder / factory QC. CoS will review after you open the **implementation** PR.  
+**This branch:** docs only. Do **not** implement here. Open a **new** BlockedPath PR **branched from #4**, not a parallel fight over `xai-prompt-session.cjs`.
 
-## Story so far (read these first)
+Read first: `docs/STORY-heavy-stack-2026-09-01.md` (the one-pager). Then `docs/DESIGN-heavy-oauth-keepalive-2026-09-01.md` (M1–M5).
 
-1. Weekly Cursor → Heavy cutover is gated CLI: **https://github.com/BlockedPath/grok-bot-setup/pull/3** (`bin/fleet-heavy`). Dry-run default. `--go` is the only live flick. Last week a watchdog SIGTERM killed the office — do not re-arm `host-hook-watchdog.sh` as the oauth fix.
-2. Per-agent effort + Pump on Codex overlay: **https://github.com/BlockedPath/grok-bot-setup/pull/4** (head `3494a97`). Review-only. **Not copied onto the live hook.** Empty `agentId` still defaults Heavy medium. Slice-0 live dump of `sessionOptions` keys still required before Pump GO.
-3. Overnight 31 Aug / 1 Sep mute: host `/health` 200, OAuth access `key` expired. Human fix: desktop-terminal `/home/box/.grok/bin/grok login --device-auth`. Token lasts ~6h.
+## Story so far (all three)
 
-This packet is **bench 3**: keepalive modules so mute does not hide behind health 200. Separate from #4.
+1. Weekly Cursor → Heavy: **https://github.com/BlockedPath/grok-bot-setup/pull/3** (`bin/fleet-heavy`). Dry-run default. `--go` is the only live flick. Do not re-arm `host-hook-watchdog.sh`.
+2. Policy + models (yesterday): **https://github.com/BlockedPath/grok-bot-setup/pull/4**  
+   CoS-reviewed SHA `3494a97`. GitHub head later moved — confirm SHA. **Not on the live hook.**  
+   Matrix: CoS + Development **high** grok-4.6; Finance **low**; default **medium**; Pump UUID **Codex only** (`127.0.0.1:10531`), fail closed.  
+   Keep CoS review: policy-missing, Pump row required, allowlist `extractAgentId`, no `SAND_XAI_*` env writes.  
+   Still open: empty `agentId` → Heavy medium. Slice-0 keys-only dump before Pump GO.
+3. OAuth keepalive (this packet): host `/health` 200 vs dead access `key`. Human login: `/home/box/.grok/bin/grok login --device-auth`. Add M1–M5 **on top of #4**. M3 is the same session file as the policy overlay.
 
-## Implement (new PR, not this docs PR)
+## Implement
 
-See `docs/DESIGN-heavy-oauth-keepalive-2026-09-01.md`. Modules M1–M5. Hard no: no `--go`, no starting watchdog, no enabling grok-session-recover, no tokens in logs.
-
-Reuse existing `scripts/token-expired.py` and `scripts/refresh-grok-if-expired.sh`. Do not rewrite from scratch.
-
-## Two doors
-
-- Hook missing / Cursor wipe → `adapters.sh recover` (Ricky GO; may restart host). That is #3 / recover. **Paused.**
-- Token dead / health 200 → M1 probe, optional M2 `grok models`, else human device-auth. That is this design.
-
-Do not weld the doors.
+Branch from #4. Keep policy tests. Add keepalive tests. Cite #3, #4, and this docs PR. No `--go`, no watchdog start, no recover enable, no tokens in logs.
 
 ## After you build
 
-Comment on the implementation PR: tests run, tests **not** run (no live login, no host restart). Ping CoS to critique like #4.
+Comment: tests run / tests **not** run (no live login, no host restart). Ping CoS.
